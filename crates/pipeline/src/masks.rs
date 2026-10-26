@@ -102,8 +102,8 @@ impl Mattes {
             if p.is_empty() { self.of(&[Skin, Hair, Teeth, Glasses]) } else { p }
         };
         match shape {
-            MaskShape::Sky => self.of(&[Sky]),
-            MaskShape::Subject => person(),
+            MaskShape::Sky { .. } => self.of(&[Sky]),
+            MaskShape::Subject { .. } => person(),
             MaskShape::People { parts, .. } => {
                 let wanted: Vec<MatteKind> = parts
                     .iter()
@@ -261,7 +261,23 @@ pub fn shape_alpha(shape: &MaskShape, frame: &Frame, w: usize, h: usize, img: &R
                 *v = 1.0 - smooth(tol * 0.5, tol, d);
             }
         }
-        MaskShape::Sky => {
+        MaskShape::Object { seg, detail, edge, .. }
+        | MaskShape::Prompt { seg, detail, edge, .. }
+        | MaskShape::Subject { seg, detail, edge }
+        | MaskShape::Sky { seg, detail, edge }
+        | MaskShape::Background { seg, detail, edge }
+            if seg.is_some() || !detail.is_empty() =>
+        {
+            // Edge: below 0 a steeper transition (up to 8× the logits), above 0 feathered (up to
+            // 2 % of the long edge, so previews and exports match)
+            let e = (*edge / 100.0).clamp(-1.0, 1.0) as f32;
+            let gain = if e < 0.0 { 1.0 - 7.0 * e } else { 1.0 };
+            sample_seg(seg.as_ref(), detail, gain, frame, w, h, &mut out);
+            if e > 0.0 {
+                smooth_plane(&mut out, e * 0.02 * frame_px(frame, w));
+            }
+        }
+        MaskShape::Sky { .. } => {
             // Classical sky heuristic until the segmenter lands (M12): bright, smooth, blue-ish or
             // unsaturated, and connected to the top of the frame.
             let m = frame.out_to_norm(w, h);
@@ -276,20 +292,10 @@ pub fn shape_alpha(shape: &MaskShape, frame: &Frame, w: usize, h: usize, img: &R
             }
             smooth_plane(&mut out, 0.01 * frame_px(frame, w));
         }
-        MaskShape::Object { seg, detail, edge, .. } | MaskShape::Prompt { seg, detail, edge, .. } if seg.is_some() || !detail.is_empty() => {
-            // Edge: below 0 a steeper transition (up to 8× the logits), above 0 feathered (up to
-            // 2 % of the long edge, so previews and exports match)
-            let e = (*edge / 100.0).clamp(-1.0, 1.0) as f32;
-            let gain = if e < 0.0 { 1.0 - 7.0 * e } else { 1.0 };
-            sample_seg(seg.as_ref(), detail, gain, frame, w, h, &mut out);
-            if e > 0.0 {
-                smooth_plane(&mut out, e * 0.02 * frame_px(frame, w));
-            }
-        }
         // not computed yet (no clicks, or a build without the model): nothing selected
         MaskShape::Object { hint, .. } if hint.is_empty() => {}
         MaskShape::Prompt { .. } => {}
-        MaskShape::Subject | MaskShape::Object { .. } | MaskShape::People { .. } => {
+        MaskShape::Subject { .. } | MaskShape::Object { .. } | MaskShape::People { .. } => {
             // Saliency heuristic: centre-weighted local contrast (replaced by the segmenter in M12).
             let m = frame.out_to_norm(w, h);
             let blur = lightcraft_raster::blur::gaussian(log_l, 0.03 * frame_px(frame, w));
@@ -302,8 +308,8 @@ pub fn shape_alpha(shape: &MaskShape, frame: &Frame, w: usize, h: usize, img: &R
             }
             smooth_plane(&mut out, 0.015 * frame_px(frame, w));
         }
-        MaskShape::Background => {
-            let mut s = shape_alpha(&MaskShape::Subject, frame, w, h, img, log_l, ev, mattes);
+        MaskShape::Background { .. } => {
+            let mut s = shape_alpha(&MaskShape::subject(), frame, w, h, img, log_l, ev, mattes);
             s.data.iter_mut().for_each(|v| *v = 1.0 - *v);
             out = s;
         }
@@ -1149,21 +1155,21 @@ mod tests {
         let mut mattes = Mattes::default();
         mattes.push(MatteKind::Sky, left_matte(w, h, 0.5));
         let f = frame(w, h);
-        let heuristic = shape_alpha(&MaskShape::Sky, &f, w, h, &img, &l, 0.0, None);
-        let matte = shape_alpha(&MaskShape::Sky, &f, w, h, &img, &l, 0.0, Some(&mattes));
+        let heuristic = shape_alpha(&MaskShape::sky(), &f, w, h, &img, &l, 0.0, None);
+        let matte = shape_alpha(&MaskShape::sky(), &f, w, h, &img, &l, 0.0, Some(&mattes));
         assert!(heuristic.get(150, 5) > 0.9 && heuristic.get(25, 90) < 0.1, "{} {}", heuristic.get(150, 5), heuristic.get(25, 90));
         assert!(matte.get(150, 5) < 0.01 && matte.get(25, 90) > 0.99, "{} {}", matte.get(150, 5), matte.get(25, 90));
         // mattes of other kinds leave the heuristic alone
         let mut hair = Mattes::default();
         hair.push(MatteKind::Hair, left_matte(w, h, 0.5));
-        assert_eq!(shape_alpha(&MaskShape::Sky, &f, w, h, &img, &l, 0.0, Some(&hair)), heuristic);
+        assert_eq!(shape_alpha(&MaskShape::sky(), &f, w, h, &img, &l, 0.0, Some(&hair)), heuristic);
         // rotated 90° clockwise, the source's left half is the top half; a preview and a larger
         // render agree
         let s = lightcraft_develop::DevelopSettings { orientation: Orientation::Rotate90, ..Default::default() };
         let f = Frame::new(w, h, &s, true);
         for (ow, oh) in [(100, 200), (25, 50)] {
             let small = Rgb32f::filled(ow, oh, [0.5, 0.7, 1.4]);
-            let a = shape_alpha(&MaskShape::Sky, &f, ow, oh, &small, &small.map(crate::local::log_lum), 0.0, Some(&mattes));
+            let a = shape_alpha(&MaskShape::sky(), &f, ow, oh, &small, &small.map(crate::local::log_lum), 0.0, Some(&mattes));
             let at = |x: f64, y: f64| a.get((x * ow as f64) as usize, (y * oh as f64) as usize);
             assert!(at(0.5, 0.2) > 0.99 && at(0.5, 0.8) < 0.01, "{ow}×{oh}: {} {}", at(0.5, 0.2), at(0.5, 0.8));
         }
@@ -1182,13 +1188,35 @@ mod tests {
         mattes.push(MatteKind::Hair, right);
         let f = frame(w, h);
         let eval = |shape: &MaskShape| shape_alpha(shape, &f, w, h, &img, &l, 0.0, Some(&mattes));
-        let subject = eval(&MaskShape::Subject);
+        let subject = eval(&MaskShape::subject());
         assert!(subject.get(10, 50) > 0.99 && subject.get(190, 50) > 0.99 && subject.get(100, 50) < 0.01);
-        let background = eval(&MaskShape::Background);
+        let background = eval(&MaskShape::background());
         assert!(background.get(100, 50) > 0.99 && background.get(10, 50) < 0.01);
         let hair = eval(&MaskShape::People { person: 0, parts: vec!["Hair".into()] });
         assert!(hair.get(190, 50) > 0.99 && hair.get(10, 50) < 0.01);
         let lips = MaskShape::People { person: 0, parts: vec!["Lips".into()] };
         assert_eq!(eval(&lips), shape_alpha(&lips, &f, w, h, &img, &l, 0.0, None));
+    }
+
+    #[test]
+    fn ai_masks_with_segmask_sample_segmentation() {
+        use lightcraft_develop::SegMask;
+        let (w, h) = (100, 100);
+        let img = Rgb32f::filled(w, h, [0.5; 3]);
+        let l = img.map(crate::local::log_lum);
+        let f = frame(w, h);
+        // logits: positive on left half, negative on right half
+        let side = 16;
+        let logits: Vec<f32> = (0..side * side).map(|i| if (i % side) < side / 2 { 10.0 } else { -10.0 }).collect();
+        let seg = SegMask::from_logits(side, &logits);
+        let subj = MaskShape::Subject { seg: Some(seg.clone()), detail: vec![], edge: 0.0 };
+        let out = shape_alpha(&subj, &f, w, h, &img, &l, 0.0, None);
+        assert!(out.get(10, 50) > 0.99, "left half selected: {}", out.get(10, 50));
+        assert!(out.get(90, 50) < 0.01, "right half unselected: {}", out.get(90, 50));
+
+        let bg = MaskShape::Background { seg: seg.invert(), detail: vec![], edge: 0.0 };
+        let out_bg = shape_alpha(&bg, &f, w, h, &img, &l, 0.0, None);
+        assert!(out_bg.get(10, 50) < 0.01, "left half unselected in inverted bg: {}", out_bg.get(10, 50));
+        assert!(out_bg.get(90, 50) > 0.99, "right half selected in inverted bg: {}", out_bg.get(90, 50));
     }
 }

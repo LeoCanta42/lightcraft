@@ -1143,6 +1143,9 @@ impl LightcraftApp {
         // a download finishing while its dialog is closed: say so once
         if self.ui.sam_downloading && !download.running {
             self.ui.sam_downloading = false;
+            if download.finished {
+                self.session.segment_warmup();
+            }
             let open = matches!(self.ui.dialog, Some(state::Dialog::SamModel { .. }));
             match sam_download_ended(&download) {
                 _ if open => {}
@@ -1150,6 +1153,15 @@ impl LightcraftApp {
                 Some((text, false)) => self.toast(ctx, text),
                 None => {}
             }
+        }
+        // When the SAM 3 model is loaded and the user is in Detail / Masking / Remove view,
+        // pre-encode the active photo in the background so the first AI click or stroke is instant.
+        if self.session.segmenter.loaded()
+            && !self.session.segmenter.busy()
+            && matches!(self.ui.view, state::ViewMode::Detail)
+            && self.session.active().is_some()
+        {
+            self.session.segment_warmup();
         }
         if let Some((due, mask)) = self.ui.detail_due {
             if now >= due && !self.session.segmenter.busy() && !self.session.segmenter.detail_busy() {

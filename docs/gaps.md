@@ -61,6 +61,8 @@ Beta-blocking gaps (B) total **~230–430 h**; with the stability and platform w
 
 ## Closed recently (kept for calibration)
 
+- 2026-10-26: Sony ILCE-7M3 embedded distortion correction enabled; automatic discovery for system/user lensfun databases; SAM 3 AI segmentation for Subject, Sky, and Background masking; SpotMode::Remove upgraded to multi-scale PatchMatch inpainting with membrane boundary blending.
+
 - 2026-10-22: saving XMP preserves foreign namespaces even when they use `lc:` or `xmp:` prefixes; importing them no longer interprets their properties as native settings or ratings. Parser, merge and save-command regressions cover the correction; no ranked gap or readiness estimate changes.
 
 - 2026-10-22: PSD/PSB imports and metadata readers now expose embedded EXIF resource 1058 and XMP resource 1060 for capture dates, GPS and All Metadata (#2519); imported PSD edit copies retain their capture date, and the `removeLocation` Original-export guard sees embedded PSD/PSB GPS. No ranked gap or headline feature count closes.
@@ -84,6 +86,7 @@ Beta-blocking gaps (B) total **~230–430 h**; with the stability and platform w
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-26 | minor | Gap 5, 8, 12 narrow: Sony ILCE-7M3 embedded distortion supported; lensfun auto-discovery; SAM 3 compound concept text segmentation for Subject/Sky/Background; SpotMode::Remove uses multi-scale PatchMatch inpainting |
 | 2026-10-24 | minor | Gap 28: ⌘⌥⇧C / ⌘⌥⇧V (Ctrl+Alt+Shift+C / V on Windows and Linux) copy and paste metadata; no key leaves the entry; hours unchanged |
 | 2026-10-24 | minor | Gap 30 shrinks: the Info panel's Show Metadata For (Target Photo / Selected Photos, `view.infoSelectedPhotos`) shows the selected photos' shared values and marks fields that differ as Mixed; the All Metadata dialog remains; 1–3 h (was 4–8) |
 | 2026-10-23 | minor | Gap 13: before a Lightroom catalog import the app asks whether it merges into the open library or goes into a new one (opt-out in Settings, #2672); hours unchanged |

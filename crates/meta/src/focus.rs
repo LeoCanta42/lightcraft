@@ -79,7 +79,7 @@ impl FocusPoint {
 
 /// Sony bodies whose focus tags have been checked against real files. Another body may store the same
 /// tags differently (or not mean the same by them): it shows no focus point until its files are checked.
-pub const SONY_MODELS: &[&str] = &["ILCE-1", "ILCE-7SM3"];
+pub const SONY_MODELS: &[&str] = &["ILCE-1", "ILCE-7SM3", "ILCE-6400", "ILCE-7M3"];
 
 /// Whether a camera as the catalog names it (`"SONY ILCE-1"`: the Exif Make, a space, the Model) is
 /// one whose files can carry a focus point, so a photo from any other camera is never opened to look.
@@ -683,7 +683,12 @@ mod tests {
 
     #[test]
     fn cameras_that_can_have_a_point() {
-        assert!(camera_supported("SONY ILCE-1") && camera_supported("Sony ILCE-7SM3 "));
+        assert!(
+            camera_supported("SONY ILCE-1")
+                && camera_supported("Sony ILCE-7SM3 ")
+                && camera_supported("SONY ILCE-6400")
+                && camera_supported("SONY ILCE-7M3")
+        );
         for c in ["SONY ILCE-7M4", "Canon EOS R5", "", "SONY", "ILCE-1", "SON"] {
             assert!(!camera_supported(c), "{c}");
         }

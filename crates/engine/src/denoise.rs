@@ -1193,6 +1193,31 @@ impl Session {
         self.denoise.dirty = true;
     }
 
+    /// Pre-load the active AI Denoise model on a background thread at app startup so it is ready
+    /// in memory before the user's first denoise action. Does nothing if no model is configured.
+    pub fn denoise_warmup(&mut self) {
+        self.denoise_refresh_active(false);
+        let Some(active) = &self.denoise.active else { return };
+        if active.model.lock().unwrap_or_else(PoisonError::into_inner).is_some() {
+            return;
+        }
+        let onnx = active.onnx.clone();
+        let manifest = active.manifest.clone();
+        let slot = active.model.clone();
+        let loader = self.denoise.loader.clone();
+        let _ = std::thread::Builder::new().name("denoise-warmup".into()).spawn(move || {
+            if slot.lock().unwrap_or_else(PoisonError::into_inner).is_some() {
+                return;
+            }
+            if let Ok(Ok(m)) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| loader(&onnx, &manifest))) {
+                let mut g = slot.lock().unwrap_or_else(PoisonError::into_inner);
+                if g.is_none() {
+                    *g = Some(m);
+                }
+            }
+        });
+    }
+
     fn denoise_spec(&self, p: &Photo) -> Option<(DenoiseSpec, String)> {
         let (dir, active) = (self.denoise_products_dir()?, self.denoise.active.as_ref()?);
         let key = product_key(&active.fingerprint, p);

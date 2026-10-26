@@ -313,3 +313,19 @@ fn a_missing_model_is_model_missing_by_kind() {
         }
     }
 }
+
+#[test]
+fn concept_masks_fallback_to_heuristic_without_model() {
+    let mut s = Session::with_demo();
+    s.segmenter.dir = Some(tmp("missing-concept"));
+    let id = s.active().unwrap();
+    for kind in ["subject", "sky", "background"] {
+        let r = s.execute("mask.add", &json!({"kind": kind})).unwrap();
+        assert!(r["activeMask"].is_number());
+    }
+    let d = s.develop_of(id).unwrap();
+    assert_eq!(d.masks.len(), 3);
+    assert!(matches!(&d.masks[0].components[0].shape, lightcraft_develop::MaskShape::Subject { seg: None, .. }));
+    assert!(matches!(&d.masks[1].components[0].shape, lightcraft_develop::MaskShape::Sky { seg: None, .. }));
+    assert!(matches!(&d.masks[2].components[0].shape, lightcraft_develop::MaskShape::Background { seg: None, .. }));
+}

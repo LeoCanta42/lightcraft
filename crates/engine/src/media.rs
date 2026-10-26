@@ -604,6 +604,16 @@ impl MediaCache {
         }
     }
 
+    /// Embedded lens data read while decoding any cached level of `id`.
+    pub fn cached_lens(&self, id: PhotoId) -> Option<lightcraft_develop::EmbeddedLens> {
+        self.thumbs
+            .peek(&id)
+            .into_iter()
+            .chain(self.previews.iter().filter(|e| e.0 == id).map(|e| &e.1))
+            .chain(self.full.iter().filter(|e| e.0 == id).map(|e| &e.1))
+            .find_map(|s| s.info.as_ref()?.lens)
+    }
+
     pub fn insert(&mut self, id: PhotoId, level: SourceLevel, img: Arc<Rgb32f>) {
         self.insert_source(id, level, DecodedSource::new(img, None));
     }
@@ -1612,15 +1622,53 @@ impl crate::Session {
     }
 
     /// Accept a finished job's loaded source into the cache. What the decode learnt about the file that the catalog
-    /// has wrong is corrected too ([`Self::learn_as_shot_wb`]).
+    /// has wrong is corrected too ([`Self::learn_as_shot_wb`], [`Self::learn_embedded_lens`]).
     pub fn accept(&mut self, r: &RenderResult) {
         if let Some(src) = &r.loaded
             && r.source_key.is_none_or(|key| self.catalog.photo(r.photo).is_some_and(|p| Hasher128::new().str(&content_key(p)).finish() == key))
         {
             if let Some(info) = &src.info {
                 self.learn_as_shot_wb(r.photo, info);
+                self.learn_embedded_lens(r.photo, info);
             }
             self.media.insert_source(r.photo, r.level, src.clone());
+        }
+    }
+
+    /// Whether `id` has embedded or profile-matched lens correction data (in the catalog or a
+    /// decoded source in memory).
+    pub fn has_lens(&self, id: PhotoId) -> bool {
+        self.catalog.photo(id).is_some_and(|p| p.embedded_lens.is_some()) || self.media.cached_lens(id).is_some()
+    }
+
+    /// Ensure `id`'s catalog entry has its embedded/profile lens data when available from a
+    /// cached decode or file probe.
+    pub(crate) fn ensure_embedded_lens(&mut self, id: PhotoId) {
+        let Some(p) = self.catalog.photo(id) else { return };
+        if p.embedded_lens.is_some() {
+            return;
+        }
+        let lens = self.media.cached_lens(id).or_else(|| match (&p.source, &self.media.file_probe) {
+            (Source::File { path }, Some(probe)) => probe(path).ok().and_then(|i| i.embedded_lens),
+            _ => None,
+        });
+        if let Some(lens) = lens
+            && let Err(e) = self.apply_system(Op::SetEmbeddedLens { id, lens: Some(Box::new(lens)) })
+        {
+            log::warn!("photo {}: embedded lens data not recorded: {e}", id.0);
+        }
+    }
+
+    /// Record embedded/profile lens data read during decode (`info`) when the catalog entry has
+    /// lens corrections enabled (`optics.lens_profile`) and no lens data stored yet.
+    fn learn_embedded_lens(&mut self, id: PhotoId, info: &SourceInfo) {
+        let Some(p) = self.catalog.photo(id) else { return };
+        if p.embedded_lens.is_some() || !p.develop.optics.lens_profile {
+            return;
+        }
+        let Some(lens) = info.lens else { return };
+        if let Err(e) = self.apply_system(Op::SetEmbeddedLens { id, lens: Some(Box::new(lens)) }) {
+            log::warn!("photo {}: embedded lens data not recorded: {e}", id.0);
         }
     }
 
