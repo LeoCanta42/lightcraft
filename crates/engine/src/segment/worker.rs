@@ -77,6 +77,7 @@ pub struct Job {
     pub kind: Kind,
     pub tag: Tag,
     pub reply: mpsc::Sender<Outcome>,
+    pub remote: Option<String>,
 }
 
 /// A finished request: the segmentation (`None`: nothing selected / nothing to report).
@@ -276,7 +277,7 @@ impl Worker {
 struct State {
     model: Option<(PathBuf, Sam3)>,
     cache: Option<(u64, Encoded)>,
-    remote: Option<remote::Client>,
+    remote: Option<(String, remote::Client)>,
 }
 
 /// Whether `later` makes `job` pointless (it asks for the same selection again).
@@ -329,7 +330,8 @@ fn run(rx: &mpsc::Receiver<Job>, shared: &Shared, idle: Duration, mut placement:
             continue;
         }
         // what a retry on the CPU needs (running the job takes them)
-        let retry = (placement == Placement::Gpu && remote::configured().is_none()).then(|| (job.kind.clone(), job.render.clone()));
+        let is_remote = job.remote.is_some() || remote::configured().is_some();
+        let retry = (placement == Placement::Gpu && !is_remote).then(|| (job.kind.clone(), job.render.clone()));
         let mut result = attempt(&mut state, shared, &mut job, placement);
         let mut notice = None;
         if matches!(result, Err(Failure::Cancelled)) {
@@ -465,10 +467,10 @@ fn encoded<'a>(state: &'a mut State, shared: &Shared, job: &mut Job, placement: 
 
 fn remote_job(state: &mut State, shared: &Shared, job: &mut Job, endpoint: &str) -> Result<Option<SegMask>, String> {
     let _busy = Flag::raise(&shared.encoding);
-    if state.remote.is_none() {
-        state.remote = Some(remote::Client::connect(endpoint)?);
+    if state.remote.as_ref().is_none_or(|(ep, _)| ep != endpoint) {
+        state.remote = Some((endpoint.to_string(), remote::Client::connect(endpoint)?));
     }
-    let client = state.remote.as_mut().ok_or("remote SAM unavailable")?;
+    let (_, client) = state.remote.as_mut().ok_or("remote SAM unavailable")?;
     let mut region = None;
     let operation = match std::mem::replace(&mut job.kind, Kind::Prepare) {
         Kind::Warmup => {
@@ -519,7 +521,8 @@ fn run_job(state: &mut State, shared: &Shared, job: &mut Job, placement: Placeme
     if job.cancel.load(Ordering::Relaxed) {
         return Err(Failure::Cancelled);
     }
-    if let Some(endpoint) = remote::configured() {
+    let remote_target = job.remote.clone().or_else(remote::configured);
+    if let Some(endpoint) = remote_target {
         let result = remote_job(state, shared, job, &endpoint);
         if result.is_err() {
             state.remote = None;
@@ -609,6 +612,7 @@ mod tests {
             kind: Kind::Prepare,
             tag,
             reply: reply.clone(),
+            remote: None,
         }
     }
 
