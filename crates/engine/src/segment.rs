@@ -518,12 +518,19 @@ impl Session {
                     active == Some(*photo) && self.develop_of(*photo).is_some_and(|d| d.masks.iter().any(|m| m.id == *mask))
                 }
                 Tag::NewPrompt { photo, mask: None, .. } => active == Some(*photo),
-                Tag::NewConcept { photo, mask, target, .. } => {
+                Tag::NewConcept { photo, mask, target, kind, .. } => {
                     active == Some(*photo)
                         && match target {
-                            Some((tm, tc)) => self
-                                .develop_of(*photo)
-                                .is_some_and(|d| d.masks.iter().find(|m| m.id == *tm).is_some_and(|m| *tc < m.components.len())),
+                            Some((tm, tc)) => self.develop_of(*photo).is_some_and(|d| {
+                                d.masks.iter().find(|m| m.id == *tm).and_then(|m| m.components.get(*tc)).is_some_and(|c| {
+                                    matches!(
+                                        (kind.as_str(), &c.shape),
+                                        ("subject", MaskShape::Subject { seg: None, .. })
+                                            | ("sky", MaskShape::Sky { seg: None, .. })
+                                            | ("background", MaskShape::Background { seg: None, .. })
+                                    )
+                                })
+                            }),
                             None => match mask {
                                 Some(m) => self.develop_of(*photo).is_some_and(|d| d.masks.iter().any(|x| x.id == *m)),
                                 None => true,
@@ -969,10 +976,12 @@ impl Session {
                     let Some(c) = d.masks.iter_mut().find(|m| m.id == tm).and_then(|m| m.components.get_mut(tc)) else {
                         return;
                     };
-                    match &mut c.shape {
-                        MaskShape::Subject { seg: s_dst, detail, .. }
-                        | MaskShape::Sky { seg: s_dst, detail, .. }
-                        | MaskShape::Background { seg: s_dst, detail, .. } => {
+                    match (&mut c.shape, kind.as_str()) {
+                        (MaskShape::Subject { seg: s_dst, detail, .. }, "subject")
+                        | (MaskShape::Sky { seg: s_dst, detail, .. }, "sky")
+                        | (MaskShape::Background { seg: s_dst, detail, .. }, "background")
+                            if s_dst.is_none() =>
+                        {
                             *s_dst = Some(seg);
                             detail.clear();
                         }
@@ -1117,6 +1126,67 @@ mod tests {
         assert!(s.segmenter.in_flight.is_empty(), "all in-flight jobs cancelled immediately");
         assert!(!s.segmenter.busy(), "segmenter is no longer busy after deleting masks");
         assert!(!s.segmenter.analyzing(), "segmenter is no longer analyzing after deleting masks");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(feature = "sam")]
+    #[test]
+    fn concept_masks_reconciliation_validates_identity_and_avoids_overwriting_mismatched_component() {
+        let mut s = Session::with_demo();
+        s.segmenter.background = true;
+        let dir = std::env::temp_dir().join(format!("lc-test-sam-identity-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("model.safetensors"), b"\x10\x00\x00\x00\x00\x00\x00\x00{}").unwrap();
+        std::fs::write(dir.join("vocab.json"), b"{}").unwrap();
+        std::fs::write(dir.join("merges.txt"), b"#version: 0.2\n").unwrap();
+        s.segmenter.dir = Some(dir.clone());
+
+        // Queue a Subject mask in background mode: target is (mid1, 0)
+        let r = s.execute("mask.add", &serde_json::json!({"kind": "subject"})).unwrap();
+        let mid1 = r["id"].as_u64().unwrap() as u32;
+        assert_eq!(s.segmenter.in_flight.len(), 1);
+
+        // Replace component 0 with a Sky component
+        let photo = s.active().unwrap();
+        let mut d = (*s.develop_of(photo).unwrap()).clone();
+        d.masks[0].components[0].shape = MaskShape::sky();
+        s.set_develop(photo, d, "change to sky").unwrap();
+
+        // Reconcile should detect the identity change and cancel the in-flight job
+        s.reconcile_segmenter();
+        assert!(s.segmenter.in_flight.is_empty(), "in-flight job should be cancelled on identity mismatch");
+
+        // Even if an outcome arrives for the original Subject job targeting (mid1, 0),
+        // poll_segmenter must NOT overwrite the Sky component!
+        let seg = SegMask::from_logits(4, &[5.0; 16]);
+        s.segmenter
+            .results
+            .0
+            .send(worker::Outcome {
+                id: 0,
+                tag: Tag::NewConcept {
+                    photo,
+                    mask: None,
+                    target: Some((mid1, 0)),
+                    op: "add".into(),
+                    name: None,
+                    kind: "subject".into(),
+                    invert: false,
+                },
+                result: Ok(Some(seg)),
+                superseded: false,
+                notice: None,
+            })
+            .unwrap();
+
+        let polled = s.segment_poll();
+        assert!(!polled.changed, "mismatched component shape must not be modified");
+        let d = s.develop_of(photo).unwrap();
+        let lightcraft_develop::MaskShape::Sky { seg: sky_seg, .. } = &d.masks[0].components[0].shape else {
+            panic!("component 0 should remain Sky");
+        };
+        assert!(sky_seg.is_none(), "sky component must not be overwritten by subject segmentation");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
