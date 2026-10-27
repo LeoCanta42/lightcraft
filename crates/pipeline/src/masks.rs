@@ -205,12 +205,23 @@ fn for_each_pos(frame: &Frame, w: usize, h: usize, out: &mut Plane, f: impl Fn(P
     });
 }
 
-/// The alpha plane of one component shape. AI shapes use the source's matching `mattes`, if any.
+/// The alpha plane of one component shape. AI shapes use stored segmentation if present,
+/// otherwise falling back to the source's matching `mattes` or heuristic.
 #[allow(clippy::too_many_arguments)]
 pub fn shape_alpha(shape: &MaskShape, frame: &Frame, w: usize, h: usize, img: &Rgb32f, log_l: &Plane, ev: f32, mattes: Option<&Mattes>) -> Plane {
-    let fitting = mattes.map(|m| m.for_shape(shape)).unwrap_or_default();
-    if !fitting.is_empty() {
-        return matte_alpha(&fitting, frame, w, h);
+    let has_stored_seg = match shape {
+        MaskShape::Object { seg, detail, .. }
+        | MaskShape::Prompt { seg, detail, .. }
+        | MaskShape::Subject { seg, detail, .. }
+        | MaskShape::Sky { seg, detail, .. }
+        | MaskShape::Background { seg, detail, .. } => seg.is_some() || !detail.is_empty(),
+        _ => false,
+    };
+    if !has_stored_seg {
+        let fitting = mattes.map(|m| m.for_shape(shape)).unwrap_or_default();
+        if !fitting.is_empty() {
+            return matte_alpha(&fitting, frame, w, h);
+        }
     }
     let mut out = Plane::new(w, h);
     let to_long = |p: Point| frame.norm_to_long(p);

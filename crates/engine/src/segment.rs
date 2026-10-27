@@ -633,6 +633,12 @@ impl Session {
         Some(self.segment_key(id)?.0)
     }
 
+    /// Whether the active photo's settings are already warmed up or warming up in SAM 3.
+    pub fn is_segment_warmed(&self) -> bool {
+        let key = self.active().and_then(|id| self.segment_key(id).map(|(k, _)| k)).unwrap_or(0);
+        self.segmenter.warmup_cancel.as_ref().is_some_and(|(k, _)| *k == key && (key != 0 || self.segmenter.loaded()))
+    }
+
     /// Pre-load the SAM 3 model on its background worker thread (and pre-encode the active photo if one
     /// is selected) so the model and image embeddings are ready in memory before the user's first AI
     /// mask or object-remove action. Does nothing if the model is not installed.

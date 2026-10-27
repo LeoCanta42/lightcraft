@@ -472,3 +472,40 @@ fn ai_masks_with_segmask_sample_segmentation() {
     assert!(out_bg.get(10, 50) < 0.01, "left half unselected in inverted bg: {}", out_bg.get(10, 50));
     assert!(out_bg.get(90, 50) > 0.99, "right half selected in inverted bg: {}", out_bg.get(90, 50));
 }
+
+#[test]
+fn stored_segmentation_takes_precedence_over_source_mattes() {
+    use lightcraft_develop::SegMask;
+    let (w, h) = (100, 100);
+    let img = Rgb32f::filled(w, h, [0.5; 3]);
+    let l = img.map(crate::local::log_lum);
+    let f = frame(w, h);
+
+    // Matte covers left half (x < 50)
+    let mut mattes = Mattes::default();
+    mattes.push(MatteKind::Sky, left_matte(w, h, 0.5));
+    mattes.push(MatteKind::Skin, left_matte(w, h, 0.5));
+
+    // Stored segmentation selects the right half (x >= 50)
+    let side = 16;
+    let logits: Vec<f32> = (0..side * side).map(|i| if (i % side) >= side / 2 { 10.0 } else { -10.0 }).collect();
+    let seg = SegMask::from_logits(side, &logits);
+
+    // Sky with stored seg uses the segmentation (right half selected), ignoring the sky matte (left half)
+    let sky_stored = MaskShape::Sky { seg: Some(seg.clone()), detail: vec![], edge: 0.0 };
+    let sky_alpha = shape_alpha(&sky_stored, &f, w, h, &img, &l, 0.0, Some(&mattes));
+    assert!(sky_alpha.get(90, 50) > 0.99, "stored segmentation wins for sky (right half): {}", sky_alpha.get(90, 50));
+    assert!(sky_alpha.get(10, 50) < 0.01, "matte fallback skipped when stored seg present: {}", sky_alpha.get(10, 50));
+
+    // Subject with stored seg uses the segmentation, ignoring the person matte
+    let subj_stored = MaskShape::Subject { seg: Some(seg), detail: vec![], edge: 0.0 };
+    let subj_alpha = shape_alpha(&subj_stored, &f, w, h, &img, &l, 0.0, Some(&mattes));
+    assert!(subj_alpha.get(90, 50) > 0.99, "stored segmentation wins for subject: {}", subj_alpha.get(90, 50));
+    assert!(subj_alpha.get(10, 50) < 0.01, "matte fallback skipped for subject: {}", subj_alpha.get(10, 50));
+
+    // Sky without stored seg falls back to the matte (left half)
+    let sky_fallback = MaskShape::sky();
+    let fb_alpha = shape_alpha(&sky_fallback, &f, w, h, &img, &l, 0.0, Some(&mattes));
+    assert!(fb_alpha.get(10, 50) > 0.99, "fallback uses matte: {}", fb_alpha.get(10, 50));
+    assert!(fb_alpha.get(90, 50) < 0.01, "fallback leaves unselected: {}", fb_alpha.get(90, 50));
+}
