@@ -1148,12 +1148,8 @@ fn spots_edit(s: &mut Session, c: &str, label: &str, f: impl FnOnce(&mut Vec<Spo
     let id = s.active().ok_or_else(|| bad(c, "no active photo"))?;
     let mut d = (*s.develop_of(id).unwrap_or_default()).clone();
     f(&mut d.spots)?;
-    let empty = d.spots.is_empty();
     s.set_develop(id, d, label)?;
     s.reconcile_segmenter();
-    if empty && c == "spot.delete" {
-        s.segmenter.cancel_all();
-    }
     Ok(())
 }
 

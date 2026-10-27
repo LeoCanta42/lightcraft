@@ -1205,7 +1205,7 @@ impl Session {
         let manifest = active.manifest.clone();
         let slot = active.model.clone();
         let loader = self.denoise.loader.clone();
-        let _ = std::thread::Builder::new().name("denoise-warmup".into()).spawn(move || {
+        let _ = std::thread::Builder::new().name("denoise-warmup".into()).stack_size(STACK).spawn(move || {
             if slot.lock().unwrap_or_else(PoisonError::into_inner).is_some() {
                 return;
             }

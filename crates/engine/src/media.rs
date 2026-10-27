@@ -1654,11 +1654,23 @@ impl crate::Session {
         if p.embedded_lens.is_some() || self.media.probed_lens.contains(&id) {
             return;
         }
-        self.media.probed_lens.insert(id);
-        let lens = self.media.cached_lens(id).or_else(|| match (&p.source, &self.media.file_probe) {
-            (Source::File { path }, Some(probe)) => probe(path).ok().and_then(|i| i.embedded_lens),
-            _ => None,
-        });
+        if let Some(lens) = self.media.cached_lens(id) {
+            self.media.probed_lens.insert(id);
+            if let Err(e) = self.apply_system(Op::SetEmbeddedLens { id, lens: Some(Box::new(lens)) }) {
+                log::warn!("photo {}: embedded lens data not recorded: {e}", id.0);
+            }
+            return;
+        }
+        let (lens, probed_ok) = match (&p.source, &self.media.file_probe) {
+            (Source::File { path }, Some(probe)) => match probe(path) {
+                Ok(info) => (info.embedded_lens, true),
+                Err(_) => (None, false),
+            },
+            _ => (None, false),
+        };
+        if probed_ok {
+            self.media.probed_lens.insert(id);
+        }
         if let Some(lens) = lens
             && let Err(e) = self.apply_system(Op::SetEmbeddedLens { id, lens: Some(Box::new(lens)) })
         {
@@ -2453,7 +2465,7 @@ mod tests {
 
     #[test]
     fn ensure_embedded_lens_avoids_repeated_probes() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
         let mut s = crate::Session::with_demo();
         let id = PhotoId(9999);
         s.catalog
@@ -2462,16 +2474,25 @@ mod tests {
             })
             .unwrap();
         static PROBE_CALLS: AtomicUsize = AtomicUsize::new(0);
+        static SHOULD_FAIL: AtomicBool = AtomicBool::new(true);
         s.media.file_probe = Some(Arc::new(|_path| {
             PROBE_CALLS.fetch_add(1, Ordering::SeqCst);
-            Err("no embedded lens".into())
+            if SHOULD_FAIL.load(Ordering::SeqCst) { Err("transient disk error".into()) } else { Ok(ProbeInfo::default()) }
         }));
         assert_eq!(PROBE_CALLS.load(Ordering::SeqCst), 0);
+        // Transient error should not be cached in probed_lens
         s.ensure_embedded_lens(id);
         assert_eq!(PROBE_CALLS.load(Ordering::SeqCst), 1);
+        assert!(!s.media.probed_lens.contains(&id));
+
+        // When probe is called again, it retries because the previous attempt errored
+        SHOULD_FAIL.store(false, Ordering::SeqCst);
+        s.ensure_embedded_lens(id);
+        assert_eq!(PROBE_CALLS.load(Ordering::SeqCst), 2);
         assert!(s.media.probed_lens.contains(&id));
-        // Calling ensure_embedded_lens again does not probe the file again
+
+        // Calling ensure_embedded_lens again avoids repeated probes after a successful negative probe
         s.ensure_embedded_lens(id);
-        assert_eq!(PROBE_CALLS.load(Ordering::SeqCst), 1);
+        assert_eq!(PROBE_CALLS.load(Ordering::SeqCst), 2);
     }
 }

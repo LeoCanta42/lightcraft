@@ -18,33 +18,37 @@ pub const ENV: &str = "LIGHTCRAFT_LENSFUN_DIR";
 pub fn database() -> Option<&'static LensDb> {
     static DB: OnceLock<Option<LensDb>> = OnceLock::new();
     DB.get_or_init(|| {
-        let dir = find_lensfun_dir()?;
-        match LensDb::load_dir(&dir) {
-            Ok((db, errors)) => {
-                for (file, e) in errors {
-                    log::warn!("lens database: skipped {file}: {e}");
+        for dir in lensfun_candidate_dirs() {
+            match LensDb::load_dir(&dir) {
+                Ok((db, errors)) => {
+                    for (file, e) in errors {
+                        log::warn!("lens database: skipped {file}: {e}");
+                    }
+                    if !db.lenses.is_empty() {
+                        return Some(db);
+                    }
                 }
-                (!db.lenses.is_empty()).then_some(db)
-            }
-            Err(e) => {
-                log::warn!("{e}");
-                None
+                Err(e) => {
+                    log::warn!("lens database load from {}: {e}", dir.display());
+                }
             }
         }
+        None
     })
     .as_ref()
 }
 
-/// Find an external lensfun database directory from the environment, user config, or common system locations.
-fn find_lensfun_dir() -> Option<PathBuf> {
+/// Find external lensfun database candidate directories from the environment, user config, and common system locations.
+fn lensfun_candidate_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
     if let Some(d) = std::env::var_os(ENV) {
         let p = PathBuf::from(d);
         if p.is_dir() {
-            return Some(p);
+            dirs.push(p);
         }
     }
     if let Some(p) = crate::config::config_dir().map(|d| d.join("lensfun")).filter(|p| p.is_dir()) {
-        return Some(p);
+        dirs.push(p);
     }
     let candidates = [
         "/usr/share/lensfun/version_1",
@@ -59,10 +63,10 @@ fn find_lensfun_dir() -> Option<PathBuf> {
     for c in candidates {
         let p = PathBuf::from(c);
         if p.is_dir() {
-            return Some(p);
+            dirs.push(p);
         }
     }
-    None
+    dirs
 }
 
 /// The database profile for a photo with metadata `m`, for its `w × h` (unoriented, default-cropped) image,

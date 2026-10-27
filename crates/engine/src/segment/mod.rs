@@ -631,28 +631,29 @@ impl Session {
         #[cfg(feature = "sam")]
         {
             let Ok(dir) = self.segmenter.model_dir() else { return };
-            let reply = self.segmenter.results.0.clone();
-            let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-            let (key, render, missing) = self
-                .active()
-                .and_then(|id| {
-                    let (key, d) = self.segment_key(id)?;
-                    let p = self.catalog.photo(id)?.clone();
-                    let missing = match &p.source {
-                        lightcraft_catalog::Source::File { path } if !std::path::Path::new(path).exists() => Some(path.clone()),
-                        _ => None,
-                    };
-                    let render = self.preview_job(id, INPUT_EDGE, INPUT_EDGE, false, &d)?;
-                    Some((key, Some(render), missing))
-                })
-                .unwrap_or_default();
+            let active_id = self.active();
+            let key = active_id.and_then(|id| self.segment_key(id).map(|(k, _)| k)).unwrap_or(0);
             if let Some((prev_key, prev_cancel)) = &self.segmenter.warmup_cancel {
                 if *prev_key == key && (key != 0 || self.segmenter.loaded()) {
                     return;
                 }
                 prev_cancel.store(true, std::sync::atomic::Ordering::Relaxed);
             }
+            let (render, missing) = active_id
+                .and_then(|id| {
+                    let (_, d) = self.segment_key(id)?;
+                    let p = self.catalog.photo(id)?;
+                    let missing = match &p.source {
+                        lightcraft_catalog::Source::File { path } if !std::path::Path::new(path).exists() => Some(path.clone()),
+                        _ => None,
+                    };
+                    let render = self.preview_job(id, INPUT_EDGE, INPUT_EDGE, false, &d)?;
+                    Some((Some(render), missing))
+                })
+                .unwrap_or_default();
+            let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
             self.segmenter.warmup_cancel = Some((key, cancel.clone()));
+            let reply = self.segmenter.results.0.clone();
             let job = worker::Job { id: 0, cancel, dir, key, render, missing, kind: worker::Kind::Warmup, tag: Tag::Warmup, reply };
             let _ = self.segmenter.worker.submit(job);
         }
@@ -796,7 +797,7 @@ impl Session {
                 (seg.clone(), Prompt::Clicks(clicks_of(hint, exclude)))
             }
             MaskShape::Prompt { text, seg: Some(seg), .. } => (seg.clone(), Prompt::Text(text.clone())),
-            MaskShape::Subject { seg: Some(seg), .. } => (seg.clone(), Prompt::Text("subject".into())),
+            MaskShape::Subject { seg: Some(seg), .. } => (seg.clone(), Prompt::Text(crate::cmd::SUBJECT_CONCEPT.into())),
             MaskShape::Sky { seg: Some(seg), .. } => (seg.clone(), Prompt::Text("sky".into())),
             _ => return Ok(false),
         };
@@ -1058,6 +1059,7 @@ mod tests {
 
         let r = s.execute("mask.add", &serde_json::json!({"kind": "background"})).unwrap();
         assert_eq!(r["pending"], true, "background mask should queue in background mode");
+        assert_eq!(s.segmenter.in_flight.len(), 3, "three jobs queued");
 
         let photo = s.active().unwrap();
         let seg = SegMask::from_logits(4, &[5.0; 16]);
@@ -1092,7 +1094,6 @@ mod tests {
         assert_eq!(s_seg.side, 4);
 
         // Deleting a mask while AI is still running immediately cancels its in-flight job and clears busy()!
-        assert!(s.segmenter.in_flight.len() >= 2);
         s.execute("mask.deleteAll", &serde_json::json!({})).unwrap();
         assert!(s.segmenter.in_flight.is_empty(), "all in-flight jobs cancelled immediately");
         assert!(!s.segmenter.busy(), "segmenter is no longer busy after deleting masks");
