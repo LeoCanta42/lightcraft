@@ -329,3 +329,15 @@ fn concept_masks_fallback_to_heuristic_without_model() {
     assert!(matches!(&d.masks[1].components[0].shape, lightcraft_develop::MaskShape::Sky { seg: None, .. }));
     assert!(matches!(&d.masks[2].components[0].shape, lightcraft_develop::MaskShape::Background { seg: None, .. }));
 }
+
+#[cfg(feature = "sam")]
+#[test]
+fn remote_concept_masks_queue_with_remote_endpoint() {
+    let mut s = Session::with_demo();
+    s.segmenter.remote = Some("127.0.0.1:19999".into());
+    s.segmenter.background = true;
+    assert!(s.segmenter.remote_endpoint().is_some());
+    assert!(s.segmenter.has_model());
+    let r = s.execute("mask.add", &json!({"kind": "subject"})).unwrap();
+    assert_eq!(r["pending"], true, "remote AI subject mask should queue in background mode");
+}

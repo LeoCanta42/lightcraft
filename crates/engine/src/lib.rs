@@ -927,7 +927,8 @@ impl Session {
     /// Change a photo's develop settings. During an interaction the change is previewed without an
     /// undo step; otherwise it is committed with a history entry.
     pub fn set_develop(&mut self, id: PhotoId, settings: DevelopSettings, label: &str) -> Result<()> {
-        if settings.optics.lens_profile {
+        let lens_profile_turned_on = settings.optics.lens_profile && self.develop_of(id).is_none_or(|old| !old.optics.lens_profile);
+        if lens_profile_turned_on {
             self.ensure_embedded_lens(id);
         }
         let now = (self.clock)();

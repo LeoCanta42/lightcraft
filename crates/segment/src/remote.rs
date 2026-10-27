@@ -108,6 +108,8 @@ impl Client {
     }
 }
 
+/// Extract text-prompted segmentation logits for a compound prompt with alternative groups (`|`)
+/// and comma-separated phrase lists.
 pub fn text_logits(model: &mut Sam3, enc: &mut Encoded, text: &str) -> crate::Result<Option<Vec<f32>>> {
     let mut best_group: Option<(f32, Vec<f32>)> = None;
     for group in text.split('|').map(str::trim).filter(|g| !g.is_empty()) {

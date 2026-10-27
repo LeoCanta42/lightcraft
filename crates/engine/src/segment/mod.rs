@@ -140,6 +140,8 @@ pub struct Segmenter {
     /// Run requests in the background and apply them in [`Session::segment_poll`] (the
     /// desktop app); otherwise commands wait for their result (CLI, MCP, tests).
     pub background: bool,
+    /// Optional remote AI worker endpoint override (host:port).
+    pub remote: Option<String>,
     pending: Option<PendingClicks>,
     messages: Vec<String>,
     #[cfg_attr(not(feature = "sam"), allow(dead_code))]
@@ -164,6 +166,7 @@ impl Default for Segmenter {
             dir: None,
             mirrors_file: None,
             background: false,
+            remote: None,
             pending: None,
             messages: Vec::new(),
             next_job_id: 1,
@@ -183,7 +186,11 @@ impl Segmenter {
     /// Whether this build can compute AI masks at all.
     pub const AVAILABLE: bool = cfg!(feature = "sam");
 
+    /// The configured remote AI worker endpoint, if any.
     pub fn remote_endpoint(&self) -> Option<String> {
+        if let Some(r) = &self.remote {
+            return Some(r.clone());
+        }
         #[cfg(feature = "sam")]
         return lightcraft_segment::remote::configured();
         #[cfg(not(feature = "sam"))]
@@ -197,6 +204,11 @@ impl Segmenter {
             return lightcraft_segment::is_model_dir(dir);
         }
         false
+    }
+
+    /// Whether the SAM 3 model is available to segment, either locally installed or through a configured remote worker.
+    pub fn has_model(&self) -> bool {
+        self.installed() || self.remote_endpoint().is_some()
     }
 
     /// Whether requests are queued or running (loading, analyzing the photo, a click…).
@@ -330,7 +342,7 @@ impl Segmenter {
             return Err(other("AI masks are not available in this build"));
         }
         #[cfg(feature = "sam")]
-        if lightcraft_segment::remote::configured().is_some() {
+        if self.remote_endpoint().is_some() {
             return Ok(PathBuf::new());
         }
         let dir = self.dir.clone().ok_or_else(|| other("no folder is set for the SAM 3 model"))?;
@@ -613,7 +625,7 @@ impl Session {
     /// is selected) so the model and image embeddings are ready in memory before the user's first AI
     /// mask or object-remove action. Does nothing if the model is not installed.
     pub fn segment_warmup(&mut self) {
-        if !self.segmenter.installed() && self.segmenter.remote_endpoint().is_none() {
+        if !self.segmenter.has_model() {
             return;
         }
         #[cfg(feature = "sam")]

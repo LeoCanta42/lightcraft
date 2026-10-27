@@ -139,7 +139,7 @@ fn resolve_ai(s: &mut Session, shape: &mut MaskShape, c: &str) -> Result<Later> 
             let found = segment(s, |s| s.segment_text(id, text))?;
             *seg = Some(found.ok_or_else(|| ai_err(format!("nothing matching “{text}” was found in this photo")))?);
         }
-        MaskShape::Subject { .. } if s.segmenter.installed() => {
+        MaskShape::Subject { .. } if s.segmenter.has_model() => {
             if background {
                 s.segmenter.require_model()?;
                 return Ok(Later::Concept { kind: "subject", text: SUBJECT_CONCEPT.into(), invert: false });
@@ -149,7 +149,7 @@ fn resolve_ai(s: &mut Session, shape: &mut MaskShape, c: &str) -> Result<Later> 
                 *seg = found;
             }
         }
-        MaskShape::Sky { .. } if s.segmenter.installed() => {
+        MaskShape::Sky { .. } if s.segmenter.has_model() => {
             if background {
                 s.segmenter.require_model()?;
                 return Ok(Later::Concept { kind: "sky", text: "sky".into(), invert: false });
@@ -159,7 +159,7 @@ fn resolve_ai(s: &mut Session, shape: &mut MaskShape, c: &str) -> Result<Later> 
                 *seg = found;
             }
         }
-        MaskShape::Background { .. } if s.segmenter.installed() => {
+        MaskShape::Background { .. } if s.segmenter.has_model() => {
             if background {
                 s.segmenter.require_model()?;
                 return Ok(Later::Concept { kind: "background", text: SUBJECT_CONCEPT.into(), invert: true });

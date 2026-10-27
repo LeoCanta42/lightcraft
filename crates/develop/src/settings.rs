@@ -1021,18 +1021,22 @@ pub enum MaskShape {
 }
 
 impl MaskShape {
+    /// Create an automatic Subject mask shape with default empty segmentation.
     pub fn subject() -> Self {
         MaskShape::Subject { seg: None, detail: Vec::new(), edge: 0.0 }
     }
 
+    /// Create an automatic Sky mask shape with default empty segmentation.
     pub fn sky() -> Self {
         MaskShape::Sky { seg: None, detail: Vec::new(), edge: 0.0 }
     }
 
+    /// Create an automatic Background mask shape with default empty segmentation.
     pub fn background() -> Self {
         MaskShape::Background { seg: None, detail: Vec::new(), edge: 0.0 }
     }
 
+    /// The segmentation mask data for shapes that carry one (Object, Describe/Prompt, Subject, Sky, Background).
     pub fn seg(&self) -> Option<&crate::SegMask> {
         match self {
             MaskShape::Object { seg, .. }

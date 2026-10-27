@@ -35,6 +35,7 @@ pub fn database() -> Option<&'static LensDb> {
     .as_ref()
 }
 
+/// Find an external lensfun database directory from the environment, user config, or common system locations.
 fn find_lensfun_dir() -> Option<PathBuf> {
     if let Some(d) = std::env::var_os(ENV) {
         let p = PathBuf::from(d);
@@ -120,6 +121,7 @@ fn sony_fallback_camera(make: Option<&str>, model: Option<&str>) -> Option<light
 const SONY_EMBEDDED_FALLBACK_MODELS: &[&str] =
     &["ILCE-6400", "ILCE-6000", "ILCE-6100", "ILCE-6300", "ILCE-6500", "ILCE-6600", "ILCE-6700", "ILCE-7M3", "ILCE-7C", "ZV-E10", "ZV-E10M2"];
 
+/// Construct embedded lens distortion correction for Sony E-mount models using their raw-IFD table.
 fn sony_embedded_lens(raw: &lightcraft_raw::RawInfo) -> Option<EmbeddedLens> {
     let model = raw.metadata.model.as_deref()?.trim();
     if !SONY_EMBEDDED_FALLBACK_MODELS.contains(&model) {

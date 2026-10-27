@@ -472,10 +472,9 @@ fn remote_job(state: &mut State, shared: &Shared, job: &mut Job, endpoint: &str)
     let mut region = None;
     let operation = match std::mem::replace(&mut job.kind, Kind::Prepare) {
         Kind::Warmup => {
-            if job.render.is_none() {
-                return Ok(None);
-            }
-            Operation::Prepare
+            // Warmup ensures connection to the remote endpoint, but does not transmit
+            // active photo pixels in the background without explicit user masking action.
+            return Ok(None);
         }
         Kind::Prepare => Operation::Prepare,
         Kind::Text(text) => Operation::Text(text),

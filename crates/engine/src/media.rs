@@ -62,7 +62,7 @@ impl SettingsHashes {
 }
 
 /// Bump when the pipeline's output changes, to invalidate cached thumbnails.
-pub const RENDER_CACHE_VERSION: u64 = 70;
+pub const RENDER_CACHE_VERSION: u64 = 71;
 
 /// Thumbnails render at one of these long edges (so window/cell size changes reuse the cache).
 pub const THUMB_SIZES: [usize; 4] = [128, 256, 384, 512];
@@ -387,6 +387,8 @@ pub struct MediaCache {
     pub rendered: Arc<PreviewCache>,
     /// Which photos have a cached denoised picture, and how to read it.
     pub denoise: DenoiseIndex,
+    /// Photos whose files have already been probed for embedded lens data.
+    pub probed_lens: std::collections::HashSet<PhotoId>,
 }
 
 /// The photos that have a cached denoised picture for the denoise model in use. Only memory: nothing here touches the
@@ -457,6 +459,7 @@ impl Default for MediaCache {
             scenes: Vec::new(),
             rendered: Arc::new(PreviewCache::memory(rendered_budget(budget))),
             denoise: DenoiseIndex::default(),
+            probed_lens: std::collections::HashSet::new(),
         }
     }
 }
@@ -491,6 +494,7 @@ impl MediaCache {
         self.thumbs = Lru::new(THUMB_SOURCE_BYTES.min(self.budget));
         self.previews.clear();
         self.full.clear();
+        self.probed_lens.clear();
     }
 
     /// How many full-resolution originals to keep at once (at least one). Compare and Reference
@@ -648,6 +652,7 @@ impl MediaCache {
         self.thumbs.remove(&id);
         self.previews.retain(|e| e.0 != id);
         self.full.retain(|e| e.0 != id);
+        self.probed_lens.remove(&id);
     }
 
     /// (decoded thumbnail sources, bytes).
@@ -1642,12 +1647,14 @@ impl crate::Session {
     }
 
     /// Ensure `id`'s catalog entry has its embedded/profile lens data when available from a
-    /// cached decode or file probe.
+    /// cached decode or file probe. Photos without lens data are marked as probed so subsequent
+    /// edits avoid repeated synchronous file reads.
     pub(crate) fn ensure_embedded_lens(&mut self, id: PhotoId) {
         let Some(p) = self.catalog.photo(id) else { return };
-        if p.embedded_lens.is_some() {
+        if p.embedded_lens.is_some() || self.media.probed_lens.contains(&id) {
             return;
         }
+        self.media.probed_lens.insert(id);
         let lens = self.media.cached_lens(id).or_else(|| match (&p.source, &self.media.file_probe) {
             (Source::File { path }, Some(probe)) => probe(path).ok().and_then(|i| i.embedded_lens),
             _ => None,
@@ -2442,5 +2449,29 @@ mod tests {
         let pv = s.preview_job(id, 800, 600, true, &a).unwrap();
         assert_ne!(pv.key, s.render_job(id, 800, 600, false, true).unwrap().key);
         assert_eq!(*pv.settings, a);
+    }
+
+    #[test]
+    fn ensure_embedded_lens_avoids_repeated_probes() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let mut s = crate::Session::with_demo();
+        let id = PhotoId(9999);
+        s.catalog
+            .apply(Op::AddPhoto {
+                photo: Box::new(Photo::new(id, Source::File { path: "/test.raw".into() }, "test.raw", "RAW", 100, 100, "2026-01-01")),
+            })
+            .unwrap();
+        static PROBE_CALLS: AtomicUsize = AtomicUsize::new(0);
+        s.media.file_probe = Some(Arc::new(|_path| {
+            PROBE_CALLS.fetch_add(1, Ordering::SeqCst);
+            Err("no embedded lens".into())
+        }));
+        assert_eq!(PROBE_CALLS.load(Ordering::SeqCst), 0);
+        s.ensure_embedded_lens(id);
+        assert_eq!(PROBE_CALLS.load(Ordering::SeqCst), 1);
+        assert!(s.media.probed_lens.contains(&id));
+        // Calling ensure_embedded_lens again does not probe the file again
+        s.ensure_embedded_lens(id);
+        assert_eq!(PROBE_CALLS.load(Ordering::SeqCst), 1);
     }
 }
